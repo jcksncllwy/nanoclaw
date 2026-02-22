@@ -42,6 +42,7 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  model?: string;
   secrets?: Record<string, string>;
 }
 

@@ -10,7 +10,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, setRouterState, updateTask } from './db.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -26,6 +26,7 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  closeContainer: (groupJid: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -169,6 +170,8 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For set_model
+    model?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -344,6 +347,24 @@ export async function processTaskIpc(
           { sourceGroup },
           'Unauthorized refresh_groups attempt blocked',
         );
+      }
+      break;
+
+    case 'set_model':
+      if (data.model) {
+        setRouterState('model_override', data.model);
+        logger.info(
+          { model: data.model, sourceGroup },
+          'Model switched via IPC',
+        );
+        // Close the active container so the next invocation uses the new model
+        const groupEntries = Object.entries(registeredGroups);
+        for (const [jid, group] of groupEntries) {
+          if (group.folder === sourceGroup) {
+            deps.closeContainer(jid);
+            break;
+          }
+        }
       }
       break;
 

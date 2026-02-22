@@ -274,6 +274,89 @@ Use available_groups.json to find the JID for a group. The folder name should be
   },
 );
 
+server.tool(
+  'get_model',
+  'Get the Claude model currently being used for this conversation.',
+  {},
+  async () => {
+    const model = process.env.NANOCLAW_CURRENT_MODEL || 'unknown';
+    return {
+      content: [{ type: 'text' as const, text: `Current model: ${model}` }],
+    };
+  },
+);
+
+server.tool(
+  'list_models',
+  'List available Claude models from the Anthropic API. Use this when the user asks to switch models or wants to know what models are available.',
+  {},
+  async () => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return {
+        content: [{ type: 'text' as const, text: 'No API key available. Cannot list models.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/models?limit=50', {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        return {
+          content: [{ type: 'text' as const, text: `API error (${response.status}): ${body}` }],
+          isError: true,
+        };
+      }
+
+      const data = await response.json() as {
+        data: Array<{ id: string; display_name: string; created_at: string }>;
+      };
+
+      const models = data.data
+        .map((m) => `- **${m.display_name}** (${m.id})`)
+        .join('\n');
+
+      return {
+        content: [{ type: 'text' as const, text: `Available models:\n${models}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'set_model',
+  'Switch the Claude model used for future conversations. Use list_models first to see available options. The change takes effect on the next message.',
+  {
+    model: z.string().describe('The model ID to switch to (e.g., "claude-opus-4-6", "claude-sonnet-4-6")'),
+  },
+  async (args) => {
+    const data = {
+      type: 'set_model',
+      model: args.model,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Model switch to "${args.model}" requested. This will take effect on the next message.` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
