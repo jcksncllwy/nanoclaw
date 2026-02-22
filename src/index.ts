@@ -12,6 +12,7 @@ import {
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { randomThinkingVerb } from './thinking-verbs.js';
 import { DiscordChannel } from './channels/discord.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import {
@@ -55,6 +56,10 @@ let messageLoopRunning = false;
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+// Anchor message IDs from piped follow-ups, keyed by chatJid.
+// The onOutput callback picks these up to create threads from the right anchor.
+const pipedAnchorIds = new Map<string, string>();
+const pipedAnchorVerbs = new Map<string, string>();
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -169,13 +174,67 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
+  // Progress thread state — reset on each new response cycle
+  let anchorMessageId: string | null = null;
+  let anchorVerb: string = '';
+  let progressThreadId: string | null = null;
+  let lastProgressTime = 0;
+  let resultSentSinceLastProgress = false;
+  const PROGRESS_THROTTLE_MS = 2000;
+
+  // Send anchor message immediately — don't wait for container startup
+  if (channel.sendMessageReturningId) {
+    anchorVerb = randomThinkingVerb();
+    anchorMessageId = await channel.sendMessageReturningId(chatJid, `✻ ${anchorVerb}...`);
+  } else {
+    await channel.setTyping?.(chatJid, true);
+  }
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
+    // Progress events → post to thread
+    if (result.status === 'progress' && result.progress) {
+      const now = Date.now();
+      // Throttle: skip if last update was less than 2s ago
+      if (now - lastProgressTime < PROGRESS_THROTTLE_MS) return;
+      lastProgressTime = now;
+
+      // If a result was already sent, this is a new response cycle
+      // (piped follow-up message) — use the anchor sent by the pipe path
+      if (resultSentSinceLastProgress) {
+        anchorMessageId = pipedAnchorIds.get(chatJid) || null;
+        anchorVerb = pipedAnchorVerbs.get(chatJid) || randomThinkingVerb();
+        pipedAnchorIds.delete(chatJid);
+        pipedAnchorVerbs.delete(chatJid);
+        // If no piped anchor available, send one now
+        if (!anchorMessageId && channel.sendMessageReturningId) {
+          anchorVerb = randomThinkingVerb();
+          anchorMessageId = await channel.sendMessageReturningId(chatJid, `✻ ${anchorVerb}...`);
+        }
+        progressThreadId = null;
+        resultSentSinceLastProgress = false;
+      }
+
+      // Create thread from anchor on first progress event
+      if (!progressThreadId && anchorMessageId && channel.startThread) {
+        progressThreadId = await channel.startThread(
+          chatJid, anchorMessageId,
+          `✻ ${anchorVerb}...`,
+        );
+      }
+      // Post update to thread
+      if (progressThreadId && channel.sendThreadMessage) {
+        await channel.sendThreadMessage(progressThreadId, `▸ ${result.progress.activity}`);
+      }
+      resetIdleTimer();
+      return;
+    }
+
     // Streaming output callback — called for each agent result
     if (result.result) {
+      resultSentSinceLastProgress = true;
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
@@ -368,8 +427,16 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
-            channel.setTyping?.(chatJid, true);
+            // Send immediate thinking verb for piped messages too
+            if (channel.sendMessageReturningId) {
+              const verb = randomThinkingVerb();
+              pipedAnchorVerbs.set(chatJid, verb);
+              channel.sendMessageReturningId(chatJid, `✻ ${verb}...`).then((id) => {
+                if (id) pipedAnchorIds.set(chatJid, id);
+              }).catch(() => {});
+            } else {
+              channel.setTyping?.(chatJid, true);
+            }
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);

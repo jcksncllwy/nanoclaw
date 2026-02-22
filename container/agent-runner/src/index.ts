@@ -31,10 +31,11 @@ interface ContainerInput {
 }
 
 interface ContainerOutput {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'progress';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  progress?: { activity: string };
 }
 
 interface SessionEntry {
@@ -354,6 +355,49 @@ function waitForIpcMessage(): Promise<string | null> {
  * allowing agent teams subagents to run to completion.
  * Also pipes IPC messages into the stream during the query.
  */
+
+// Strip container-internal path prefixes for cleaner display
+function cleanPath(p: unknown): string {
+  return String(p || '').replace(/^\/workspace\/project\//, '');
+}
+
+function formatToolActivity(toolName: string, input: Record<string, unknown>): string | null {
+  switch (toolName) {
+    case 'Read':
+      return `Reading ${cleanPath(input.file_path) || 'file'}`;
+    case 'Write':
+      return `Writing ${cleanPath(input.file_path) || 'file'}`;
+    case 'Edit':
+      return `Editing ${cleanPath(input.file_path) || 'file'}`;
+    case 'Glob':
+      return `Finding files matching ${input.pattern || '...'}`;
+    case 'Grep':
+      return `Searching for "${input.pattern || '...'}"`;
+    case 'Bash': {
+      const cmd = String(input.command || '').replace(/^\/workspace\/project\//g, '');
+      return `Running ${cmd}`;
+    }
+    case 'WebSearch':
+      return `Searching web for "${input.query || '...'}"`;
+    case 'WebFetch':
+      return `Fetching ${input.url || 'URL'}`;
+    case 'Task':
+      return `Spawning subagent: ${input.description || '...'}`;
+    case 'TodoWrite':
+      return 'Updating task list';
+    case 'ToolSearch':
+      return `Searching for tools: ${input.query || '...'}`;
+    case 'NotebookEdit':
+      return `Editing notebook ${cleanPath(input.notebook_path) || ''}`;
+    default:
+      // Filter out noise — send_message is just Mim responding
+      if (toolName === 'mcp__nanoclaw__send_message') return null;
+      if (toolName.startsWith('mcp__nanoclaw__'))
+        return `Using ${toolName.replace('mcp__nanoclaw__', '')}`;
+      return `Using ${toolName}`;
+  }
+}
+
 async function runQuery(
   prompt: string,
   sessionId: string | undefined,
@@ -465,6 +509,19 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Emit progress events for tool_use content blocks
+      const msg = (message as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } }).message;
+      if (msg?.content) {
+        for (const block of msg.content) {
+          if (block.type === 'tool_use' && block.name) {
+            const activity = formatToolActivity(block.name, block.input || {});
+            if (activity) {
+              writeOutput({ status: 'progress', result: null, progress: { activity } });
+            }
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -475,6 +532,7 @@ async function runQuery(
     if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
       const tn = message as { task_id: string; status: string; summary: string };
       log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
+      writeOutput({ status: 'progress', result: null, progress: { activity: `Task ${tn.status}: ${tn.summary}` } });
     }
 
     if (message.type === 'result') {

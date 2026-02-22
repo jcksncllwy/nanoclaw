@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import { Client, Events, GatewayIntentBits, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { logger } from '../logger.js';
@@ -231,6 +231,48 @@ export class DiscordChannel implements Channel {
       }
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
+    }
+  }
+
+  async sendMessageReturningId(jid: string, text: string): Promise<string | null> {
+    if (!this.client) return null;
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return null;
+      const msg = await (channel as TextChannel).send(text);
+      return msg.id;
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Discord message for thread');
+      return null;
+    }
+  }
+
+  async startThread(jid: string, messageId: string, name: string): Promise<string | null> {
+    if (!this.client) return null;
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return null;
+      const textChannel = channel as TextChannel;
+      const message = await textChannel.messages.fetch(messageId);
+      const thread = await message.startThread({ name });
+      return thread.id;
+    } catch (err) {
+      logger.error({ jid, messageId, err }, 'Failed to create Discord thread');
+      return null;
+    }
+  }
+
+  async sendThreadMessage(threadId: string, text: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      const thread = await this.client.channels.fetch(threadId);
+      if (thread && 'send' in thread) {
+        await (thread as ThreadChannel).send(text);
+      }
+    } catch (err) {
+      logger.debug({ threadId, err }, 'Failed to send Discord thread message');
     }
   }
 }

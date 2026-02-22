@@ -87,6 +87,11 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  // Optional: send a message and return its ID (for creating threads from it)
+  sendMessageReturningId?(jid: string, text: string): Promise<string | null>;
+  // Optional: thread support for progress indicators
+  startThread?(jid: string, messageId: string, name: string): Promise<string | null>;
+  sendThreadMessage?(threadId: string, text: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages
