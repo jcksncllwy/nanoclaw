@@ -58,6 +58,14 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 - **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks (first personal AI assistant to support this)
 - **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
 
+## New Features
+
+This fork adds:
+
+- **Discord channel** - Use Discord instead of (or alongside) WhatsApp. Set `DISCORD_ONLY=true` to run without WhatsApp entirely.
+- **Runtime model switching** - Ask your assistant to switch Claude models on the fly ("switch to Opus"). Available models are fetched dynamically from the Anthropic API, so new releases work immediately with no code changes.
+- **API key auth** - Use `ANTHROPIC_API_KEY` instead of OAuth tokens for Claude authentication.
+
 ## Usage
 
 Talk to your assistant with the trigger word (default: `@Andy`):
