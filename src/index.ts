@@ -3,12 +3,16 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  CLAUDE_MODEL,
   DATA_DIR,
+  DISCORD_BOT_TOKEN,
+  DISCORD_ONLY,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { DiscordChannel } from './channels/discord.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import {
   ContainerOutput,
@@ -16,7 +20,7 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import { cleanupOrphans, ensureContainerRuntimeRunning } from './container-runtime.js';
+import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -123,10 +127,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (!group) return true;
 
   const channel = findChannel(channels, chatJid);
-  if (!channel) {
-    console.log(`Warning: no channel owns JID ${chatJid}, skipping messages`);
-    return true;
-  }
+  if (!channel) return true;
 
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
@@ -185,10 +186,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
-    }
-
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
     }
 
     if (result.status === 'error') {
@@ -261,6 +258,10 @@ async function runAgent(
       }
     : undefined;
 
+  // Use model override from runtime switching, fall back to .env default
+  const modelOverride = getRouterState('model_override');
+  const model = modelOverride || CLAUDE_MODEL;
+
   try {
     const output = await runContainerAgent(
       group,
@@ -270,6 +271,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        model,
       },
       (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
@@ -332,10 +334,7 @@ async function startMessageLoop(): Promise<void> {
           if (!group) continue;
 
           const channel = findChannel(channels, chatJid);
-          if (!channel) {
-            console.log(`Warning: no channel owns JID ${chatJid}, skipping messages`);
-            continue;
-          }
+          if (!channel) continue;
 
           const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
@@ -370,9 +369,7 @@ async function startMessageLoop(): Promise<void> {
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
             // Show typing indicator while the container processes the piped message
-            channel.setTyping?.(chatJid, true)?.catch((err) =>
-              logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-            );
+            channel.setTyping?.(chatJid, true);
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
@@ -434,9 +431,17 @@ async function main(): Promise<void> {
   };
 
   // Create and connect channels
-  whatsapp = new WhatsAppChannel(channelOpts);
-  channels.push(whatsapp);
-  await whatsapp.connect();
+  if (DISCORD_BOT_TOKEN) {
+    const discord = new DiscordChannel(DISCORD_BOT_TOKEN, channelOpts);
+    channels.push(discord);
+    await discord.connect();
+  }
+
+  if (!DISCORD_ONLY) {
+    whatsapp = new WhatsAppChannel(channelOpts);
+    channels.push(whatsapp);
+    await whatsapp.connect();
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -446,10 +451,7 @@ async function main(): Promise<void> {
     onProcess: (groupJid, proc, containerName, groupFolder) => queue.registerProcess(groupJid, proc, containerName, groupFolder),
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
-      if (!channel) {
-        console.log(`Warning: no channel owns JID ${jid}, cannot send message`);
-        return;
-      }
+      if (!channel) return;
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },
@@ -465,13 +467,11 @@ async function main(): Promise<void> {
     syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
+    closeContainer: (jid) => queue.closeStdin(jid),
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
-  startMessageLoop().catch((err) => {
-    logger.fatal({ err }, 'Message loop crashed unexpectedly');
-    process.exit(1);
-  });
+  startMessageLoop();
 }
 
 // Guard: only run when executed directly, not when imported by tests
