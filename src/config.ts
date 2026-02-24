@@ -37,6 +37,8 @@ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 export const MAIN_GROUP_FOLDER = 'main';
+export const MEDIA_DIR = path.resolve(PROJECT_ROOT, 'data', 'media');
+export const MEDIA_AUTO_DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

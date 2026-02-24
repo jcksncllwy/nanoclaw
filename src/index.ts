@@ -23,10 +23,12 @@ import {
 } from './container-runner.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import {
+  createPendingDownload,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getLastMessageId,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -499,7 +501,11 @@ async function main(): Promise<void> {
 
   // Create and connect channels
   if (DISCORD_BOT_TOKEN) {
-    const discord = new DiscordChannel(DISCORD_BOT_TOKEN, channelOpts);
+    const discord = new DiscordChannel(DISCORD_BOT_TOKEN, {
+      ...channelOpts,
+      getLastMessageId,
+      createPendingDownload,
+    });
     channels.push(discord);
     await discord.connect();
   }

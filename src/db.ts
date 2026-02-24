@@ -58,6 +58,20 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
 
+    CREATE TABLE IF NOT EXISTS pending_downloads (
+      id TEXT PRIMARY KEY,
+      chat_jid TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      url TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      content_type TEXT,
+      size INTEGER,
+      message_id TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      local_path TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -458,6 +472,59 @@ export function logTaskRun(log: TaskRunLog): void {
     log.result,
     log.error,
   );
+}
+
+/**
+ * Get the most recent message ID for a chat, used for Discord reconnection recovery.
+ */
+export function getLastMessageId(chatJid: string): string | null {
+  const row = db.prepare(
+    'SELECT id FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT 1'
+  ).get(chatJid) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+// --- Pending download accessors ---
+
+export interface PendingDownload {
+  id: string;
+  chat_jid: string;
+  group_folder: string;
+  url: string;
+  filename: string;
+  content_type: string | null;
+  size: number | null;
+  message_id: string;
+  status: string;
+  local_path: string | null;
+  created_at: string;
+}
+
+export function createPendingDownload(download: Omit<PendingDownload, 'status' | 'local_path'>): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_downloads (id, chat_jid, group_folder, url, filename, content_type, size, message_id, status, local_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?)`,
+  ).run(
+    download.id,
+    download.chat_jid,
+    download.group_folder,
+    download.url,
+    download.filename,
+    download.content_type,
+    download.size,
+    download.message_id,
+    download.created_at,
+  );
+}
+
+export function getPendingDownload(id: string): PendingDownload | undefined {
+  return db.prepare('SELECT * FROM pending_downloads WHERE id = ?').get(id) as PendingDownload | undefined;
+}
+
+export function completePendingDownload(id: string, localPath: string): void {
+  db.prepare(
+    `UPDATE pending_downloads SET status = 'downloaded', local_path = ? WHERE id = ?`,
+  ).run(localPath, id);
 }
 
 // --- Router state accessors ---

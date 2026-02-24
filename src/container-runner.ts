@@ -14,6 +14,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  MEDIA_DIR,
 } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -155,6 +156,15 @@ function buildVolumeMounts(
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
+  });
+
+  // Per-group media directory (downloaded Discord attachments, etc.)
+  const groupMediaDir = path.join(MEDIA_DIR, group.folder);
+  fs.mkdirSync(groupMediaDir, { recursive: true });
+  mounts.push({
+    hostPath: groupMediaDir,
+    containerPath: '/workspace/media',
+    readonly: true,
   });
 
   // Mount agent-runner source from host — recompiled on container startup.

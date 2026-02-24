@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   TRIGGER_PATTERN: /^@Andy\b/i,
+  MEDIA_AUTO_DOWNLOAD_MAX_BYTES: 50 * 1024 * 1024,
 }));
 
 // Mock logger
@@ -16,6 +17,19 @@ vi.mock('../logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
   },
+}));
+
+// Mock db
+vi.mock('../db.js', () => ({
+  PendingDownload: {},
+}));
+
+// Mock media
+vi.mock('../media.js', () => ({
+  buildMediaPath: vi.fn((_group: string, msgId: string, name: string) => `/mock/media/${msgId}-${name}`),
+  containerMediaPath: vi.fn((msgId: string, name: string) => `/workspace/media/${msgId}-${name}`),
+  downloadAttachment: vi.fn().mockResolvedValue(undefined),
+  formatSize: vi.fn((bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`),
 }));
 
 // --- discord.js mock ---
@@ -476,13 +490,13 @@ describe('DiscordChannel', () => {
   // --- Attachments ---
 
   describe('attachments', () => {
-    it('stores image attachment with placeholder', async () => {
+    it('downloads and stores image attachment with path', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'photo.png', contentType: 'image/png' }],
+        ['att1', { id: 'att1', name: 'photo.png', contentType: 'image/png', url: 'https://cdn.discord.com/photo.png', size: 1024 }],
       ]);
       const msg = createMessage({
         content: '',
@@ -494,18 +508,18 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: photo.png]',
+          content: '[Image: photo.png — /workspace/media/msg_001-photo.png]',
         }),
       );
     });
 
-    it('stores video attachment with placeholder', async () => {
+    it('downloads and stores video attachment with path', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'clip.mp4', contentType: 'video/mp4' }],
+        ['att1', { id: 'att1', name: 'clip.mp4', contentType: 'video/mp4', url: 'https://cdn.discord.com/clip.mp4', size: 2048 }],
       ]);
       const msg = createMessage({
         content: '',
@@ -517,18 +531,18 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Video: clip.mp4]',
+          content: '[Video: clip.mp4 — /workspace/media/msg_001-clip.mp4]',
         }),
       );
     });
 
-    it('stores file attachment with placeholder', async () => {
+    it('downloads and stores file attachment with path', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'report.pdf', contentType: 'application/pdf' }],
+        ['att1', { id: 'att1', name: 'report.pdf', contentType: 'application/pdf', url: 'https://cdn.discord.com/report.pdf', size: 4096 }],
       ]);
       const msg = createMessage({
         content: '',
@@ -540,7 +554,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[File: report.pdf]',
+          content: '[File: report.pdf — /workspace/media/msg_001-report.pdf]',
         }),
       );
     });
@@ -551,7 +565,7 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'photo.jpg', contentType: 'image/jpeg' }],
+        ['att1', { id: 'att1', name: 'photo.jpg', contentType: 'image/jpeg', url: 'https://cdn.discord.com/photo.jpg', size: 1024 }],
       ]);
       const msg = createMessage({
         content: 'Check this out',
@@ -563,7 +577,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: 'Check this out\n[Image: photo.jpg]',
+          content: 'Check this out\n[Image: photo.jpg — /workspace/media/msg_001-photo.jpg]',
         }),
       );
     });
@@ -574,8 +588,8 @@ describe('DiscordChannel', () => {
       await channel.connect();
 
       const attachments = new Map([
-        ['att1', { name: 'a.png', contentType: 'image/png' }],
-        ['att2', { name: 'b.txt', contentType: 'text/plain' }],
+        ['att1', { id: 'att1', name: 'a.png', contentType: 'image/png', url: 'https://cdn.discord.com/a.png', size: 1024 }],
+        ['att2', { id: 'att2', name: 'b.txt', contentType: 'text/plain', url: 'https://cdn.discord.com/b.txt', size: 512 }],
       ]);
       const msg = createMessage({
         content: '',
@@ -587,7 +601,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: a.png]\n[File: b.txt]',
+          content: '[Image: a.png — /workspace/media/msg_001-a.png]\n[File: b.txt — /workspace/media/msg_001-b.txt]',
         }),
       );
     });

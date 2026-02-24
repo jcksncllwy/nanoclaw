@@ -1,7 +1,9 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel, ThreadChannel } from 'discord.js';
+import { Attachment, Client, Collection, Events, GatewayIntentBits, Message, TextChannel, ThreadChannel } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, MEDIA_AUTO_DOWNLOAD_MAX_BYTES, TRIGGER_PATTERN } from '../config.js';
+import { PendingDownload } from '../db.js';
 import { logger } from '../logger.js';
+import { buildMediaPath, containerMediaPath, downloadAttachment, formatSize } from '../media.js';
 import {
   Channel,
   OnChatMetadata,
@@ -13,6 +15,8 @@ export interface DiscordChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  getLastMessageId?: (chatJid: string) => string | null;
+  createPendingDownload?: (download: Omit<PendingDownload, 'status' | 'local_path'>) => void;
 }
 
 export class DiscordChannel implements Channel {
@@ -21,6 +25,7 @@ export class DiscordChannel implements Channel {
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
   private botToken: string;
+  private hasConnectedOnce = false;
 
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
@@ -84,20 +89,15 @@ export class DiscordChannel implements Channel {
         }
       }
 
-      // Handle attachments — store placeholders so the agent knows something was sent
+      // Handle attachments — download files and include local paths
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map((att) => {
-          const contentType = att.contentType || '';
-          if (contentType.startsWith('image/')) {
-            return `[Image: ${att.name || 'image'}]`;
-          } else if (contentType.startsWith('video/')) {
-            return `[Video: ${att.name || 'video'}]`;
-          } else if (contentType.startsWith('audio/')) {
-            return `[Audio: ${att.name || 'audio'}]`;
-          } else {
-            return `[File: ${att.name || 'file'}]`;
-          }
-        });
+        const group = this.opts.registeredGroups()[chatJid];
+        const attachmentDescriptions = await this.processAttachments(
+          message.attachments,
+          group?.folder || chatJid,
+          msgId,
+          chatJid,
+        );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
         } else {
@@ -157,20 +157,174 @@ export class DiscordChannel implements Channel {
     });
 
     return new Promise<void>((resolve) => {
-      this.client!.once(Events.ClientReady, (readyClient) => {
-        logger.info(
-          { username: readyClient.user.tag, id: readyClient.user.id },
-          'Discord bot connected',
-        );
-        console.log(`\n  Discord bot: ${readyClient.user.tag}`);
-        console.log(
-          `  Use /chatid command or check channel IDs in Discord settings\n`,
-        );
-        resolve();
+      this.client!.on(Events.ClientReady, (readyClient) => {
+        if (!this.hasConnectedOnce) {
+          this.hasConnectedOnce = true;
+          logger.info(
+            { username: readyClient.user.tag, id: readyClient.user.id },
+            'Discord bot connected',
+          );
+          console.log(`\n  Discord bot: ${readyClient.user.tag}`);
+          console.log(
+            `  Use /chatid command or check channel IDs in Discord settings\n`,
+          );
+          resolve();
+        } else {
+          logger.info('Discord bot reconnected (full reconnect)');
+          this.recoverMissedMessages();
+        }
+      });
+
+      this.client!.on(Events.ShardResume, () => {
+        logger.info('Discord shard resumed');
+        this.recoverMissedMessages();
       });
 
       this.client!.login(this.botToken);
     });
+  }
+
+  private async processAttachments(
+    attachments: Collection<string, Attachment>,
+    groupFolder: string,
+    messageId: string,
+    chatJid: string,
+  ): Promise<string[]> {
+    const descriptions: string[] = [];
+
+    for (const att of attachments.values()) {
+      const contentType = att.contentType || '';
+      const name = att.name || 'file';
+      let typeLabel: string;
+      if (contentType.startsWith('image/')) typeLabel = 'Image';
+      else if (contentType.startsWith('video/')) typeLabel = 'Video';
+      else if (contentType.startsWith('audio/')) typeLabel = 'Audio';
+      else typeLabel = 'File';
+
+      const size = att.size;
+
+      if (size >= MEDIA_AUTO_DOWNLOAD_MAX_BYTES) {
+        // Large file — create pending download record
+        const dlId = `dl_${messageId}_${att.id}`;
+        if (this.opts.createPendingDownload) {
+          const hostPath = buildMediaPath(groupFolder, messageId, name);
+          this.opts.createPendingDownload({
+            id: dlId,
+            chat_jid: chatJid,
+            group_folder: groupFolder,
+            url: att.url,
+            filename: name,
+            content_type: contentType || null,
+            size,
+            message_id: messageId,
+            created_at: new Date().toISOString(),
+          });
+          logger.info({ dlId, name, size: formatSize(size) }, 'Large attachment pending download approval');
+        }
+        descriptions.push(`[${typeLabel}: ${name} — ${formatSize(size)}, not yet downloaded (pending:${dlId})]`);
+        continue;
+      }
+
+      // Small file — download immediately
+      const hostPath = buildMediaPath(groupFolder, messageId, name);
+      const agentPath = containerMediaPath(messageId, name);
+      try {
+        await downloadAttachment(att.url, hostPath);
+        descriptions.push(`[${typeLabel}: ${name} — ${agentPath}]`);
+      } catch (err) {
+        logger.error({ name, err }, 'Failed to download Discord attachment');
+        descriptions.push(`[${typeLabel}: ${name} — download failed]`);
+      }
+    }
+
+    return descriptions;
+  }
+
+  private async recoverMissedMessages(): Promise<void> {
+    if (!this.client || !this.opts.getLastMessageId) return;
+
+    const groups = this.opts.registeredGroups();
+    for (const [chatJid, group] of Object.entries(groups)) {
+      if (!chatJid.startsWith('dc:')) continue;
+
+      const lastMessageId = this.opts.getLastMessageId(chatJid);
+      if (!lastMessageId) {
+        logger.debug({ chatJid }, 'No previous messages in DB, skipping recovery');
+        continue;
+      }
+
+      try {
+        const channelId = chatJid.replace(/^dc:/, '');
+        const channel = await this.client.channels.fetch(channelId);
+        if (!channel || !('messages' in channel)) continue;
+
+        const textChannel = channel as TextChannel;
+        const messages = await textChannel.messages.fetch({ after: lastMessageId, limit: 100 });
+
+        // Filter bot messages and sort oldest-first
+        const userMessages = [...messages.values()]
+          .filter((m) => !m.author.bot)
+          .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+        if (userMessages.length === 0) continue;
+
+        logger.info(
+          { chatJid, groupName: group.name, count: userMessages.length },
+          'Recovering missed messages after reconnect',
+        );
+
+        for (const message of userMessages) {
+          let content = message.content;
+          const timestamp = message.createdAt.toISOString();
+          const senderName =
+            message.member?.displayName ||
+            message.author.displayName ||
+            message.author.username;
+          const sender = message.author.id;
+
+          // Translate @bot mentions (same as live handler)
+          if (this.client?.user) {
+            const botId = this.client.user.id;
+            const isBotMentioned =
+              message.mentions.users.has(botId) ||
+              content.includes(`<@${botId}>`) ||
+              content.includes(`<@!${botId}>`);
+            if (isBotMentioned) {
+              content = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
+              if (!TRIGGER_PATTERN.test(content)) {
+                content = `@${ASSISTANT_NAME} ${content}`;
+              }
+            }
+          }
+
+          // Handle attachments
+          if (message.attachments.size > 0) {
+            const attachmentDescriptions = await this.processAttachments(
+              message.attachments,
+              group.folder,
+              message.id,
+              chatJid,
+            );
+            content = content
+              ? `${content}\n${attachmentDescriptions.join('\n')}`
+              : attachmentDescriptions.join('\n');
+          }
+
+          this.opts.onChatMetadata(chatJid, timestamp, group.name);
+          this.opts.onMessage(chatJid, {
+            id: message.id,
+            chat_jid: chatJid,
+            sender,
+            sender_name: senderName,
+            content,
+            timestamp,
+            is_from_me: false,
+          });
+        }
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to recover missed messages');
+      }
+    }
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {

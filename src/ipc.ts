@@ -10,7 +10,8 @@ import {
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, setRouterState, updateTask } from './db.js';
+import { completePendingDownload, createTask, deleteTask, getPendingDownload, getTaskById, setRouterState, updateTask } from './db.js';
+import { buildMediaPath, downloadAttachment, formatSize } from './media.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -172,6 +173,8 @@ export async function processTaskIpc(
     containerConfig?: RegisteredGroup['containerConfig'];
     // For set_model
     model?: string;
+    // For download_attachment
+    downloadId?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -391,6 +394,49 @@ export async function processTaskIpc(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'download_attachment':
+      if (data.downloadId) {
+        const dl = getPendingDownload(data.downloadId);
+        if (!dl) {
+          logger.warn({ downloadId: data.downloadId }, 'Pending download not found');
+          break;
+        }
+        if (dl.group_folder !== sourceGroup) {
+          logger.warn(
+            { downloadId: data.downloadId, sourceGroup, dlGroup: dl.group_folder },
+            'Unauthorized download_attachment attempt blocked',
+          );
+          break;
+        }
+        if (dl.status === 'downloaded') {
+          logger.debug({ downloadId: data.downloadId }, 'Download already completed');
+          break;
+        }
+        try {
+          const localPath = buildMediaPath(dl.group_folder, dl.message_id, dl.filename);
+          await downloadAttachment(dl.url, localPath);
+          completePendingDownload(dl.id, localPath);
+          await deps.sendMessage(
+            dl.chat_jid,
+            `Downloaded ${dl.filename} (${formatSize(dl.size)})`,
+          );
+          logger.info(
+            { downloadId: data.downloadId, filename: dl.filename },
+            'Pending attachment downloaded via IPC',
+          );
+        } catch (err) {
+          logger.error(
+            { downloadId: data.downloadId, err },
+            'Failed to download pending attachment',
+          );
+          await deps.sendMessage(
+            dl.chat_jid,
+            `Failed to download ${dl.filename} — the link may have expired.`,
+          );
+        }
       }
       break;
 
