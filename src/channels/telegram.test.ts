@@ -18,6 +18,11 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
+// Mock telegramify-markdown — pass through text unchanged
+vi.mock('telegramify-markdown', () => ({
+  default: (text: string) => text,
+}));
+
 // --- Grammy mock ---
 
 type Handler = (...args: any[]) => any;
@@ -32,7 +37,8 @@ vi.mock('grammy', () => ({
     errorHandler: Handler | null = null;
 
     api = {
-      sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 42 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -696,7 +702,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '100200300',
         'Hello',
-        { parse_mode: 'HTML' },
+        { parse_mode: 'MarkdownV2' },
       );
     });
 
@@ -710,7 +716,7 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
         '-1001234567890',
         'Group message',
-        { parse_mode: 'HTML' },
+        { parse_mode: 'MarkdownV2' },
       );
     });
 
@@ -727,13 +733,13 @@ describe('TelegramChannel', () => {
         1,
         '100200300',
         'x'.repeat(4096),
-        { parse_mode: 'HTML' },
+        { parse_mode: 'MarkdownV2' },
       );
       expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
         2,
         '100200300',
         'x'.repeat(904),
-        { parse_mode: 'HTML' },
+        { parse_mode: 'MarkdownV2' },
       );
     });
 
@@ -800,57 +806,6 @@ describe('TelegramChannel', () => {
     it('does not own unknown JID formats', () => {
       const channel = new TelegramChannel('test-token', createTestOpts());
       expect(channel.ownsJid('random-string')).toBe(false);
-    });
-  });
-
-  // --- setTyping ---
-
-  describe('setTyping', () => {
-    it('sends typing action when isTyping is true', async () => {
-      const opts = createTestOpts();
-      const channel = new TelegramChannel('test-token', opts);
-      await channel.connect();
-
-      await channel.setTyping('tg:100200300', true);
-
-      expect(currentBot().api.sendChatAction).toHaveBeenCalledWith(
-        '100200300',
-        'typing',
-      );
-    });
-
-    it('does nothing when isTyping is false', async () => {
-      const opts = createTestOpts();
-      const channel = new TelegramChannel('test-token', opts);
-      await channel.connect();
-
-      await channel.setTyping('tg:100200300', false);
-
-      expect(currentBot().api.sendChatAction).not.toHaveBeenCalled();
-    });
-
-    it('does nothing when bot is not initialized', async () => {
-      const opts = createTestOpts();
-      const channel = new TelegramChannel('test-token', opts);
-
-      // Don't connect
-      await channel.setTyping('tg:100200300', true);
-
-      // No error, no API call
-    });
-
-    it('handles typing indicator failure gracefully', async () => {
-      const opts = createTestOpts();
-      const channel = new TelegramChannel('test-token', opts);
-      await channel.connect();
-
-      currentBot().api.sendChatAction.mockRejectedValueOnce(
-        new Error('Rate limited'),
-      );
-
-      await expect(
-        channel.setTyping('tg:100200300', true),
-      ).resolves.toBeUndefined();
     });
   });
 

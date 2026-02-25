@@ -60,13 +60,14 @@ When you learn something important:
 Check the `platform` attribute on incoming messages and format accordingly.
 
 ### Telegram
-Use HTML formatting (messages are sent with parse_mode HTML):
-- <b>Bold</b>
-- <i>Italic</i>
-- <code>inline code</code>
-- <pre>code blocks</pre>
-- No headings — use <b>bold</b> for section titles instead
-- Only escape: &amp; → &amp;amp;  &lt; → &amp;lt;  &gt; → &amp;gt;
+Use standard Markdown (same as Discord — it is automatically converted to Telegram entities):
+- **Bold** (double asterisks)
+- *Italic* (single asterisks)
+- `inline code`
+- ```code blocks```
+- [links](url)
+- ~~strikethrough~~
+- No headings — use **bold** for section titles instead
 - Keep messages concise and readable
 
 ### Discord
