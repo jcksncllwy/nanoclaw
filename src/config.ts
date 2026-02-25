@@ -11,6 +11,9 @@ const envConfig = readEnvFile([
   'CLAUDE_MODEL',
   'DISCORD_BOT_TOKEN',
   'DISCORD_ONLY',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_ONLY',
+  'WHATSAPP_DISABLED',
 ]);
 
 export const ASSISTANT_NAME =
@@ -79,3 +82,13 @@ export const DISCORD_BOT_TOKEN =
   process.env.DISCORD_BOT_TOKEN || envConfig.DISCORD_BOT_TOKEN || '';
 export const DISCORD_ONLY =
   (process.env.DISCORD_ONLY || envConfig.DISCORD_ONLY) === 'true';
+
+// Telegram configuration
+export const TELEGRAM_BOT_TOKEN =
+  process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
+export const TELEGRAM_ONLY =
+  (process.env.TELEGRAM_ONLY || envConfig.TELEGRAM_ONLY) === 'true';
+
+// WhatsApp can be explicitly disabled when using other channels
+export const WHATSAPP_DISABLED =
+  (process.env.WHATSAPP_DISABLED || envConfig.WHATSAPP_DISABLED) === 'true';
