@@ -62,7 +62,7 @@ describe('formatMessages', () => {
     const result = formatMessages([makeMsg()]);
     expect(result).toBe(
       '<messages>\n' +
-        '<message sender="Alice" time="2024-01-01T00:00:00.000Z">hello</message>\n' +
+        '<message sender="Alice" platform="whatsapp" time="2024-01-01T00:00:00.000Z">hello</message>\n' +
         '</messages>',
     );
   });
@@ -91,6 +91,21 @@ describe('formatMessages', () => {
     expect(result).toContain(
       '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;',
     );
+  });
+
+  it('includes platform="discord" for dc: JIDs', () => {
+    const result = formatMessages([makeMsg({ chat_jid: 'dc:123456' })]);
+    expect(result).toContain('platform="discord"');
+  });
+
+  it('includes platform="telegram" for tg: JIDs', () => {
+    const result = formatMessages([makeMsg({ chat_jid: 'tg:789' })]);
+    expect(result).toContain('platform="telegram"');
+  });
+
+  it('includes platform="whatsapp" for @g.us JIDs', () => {
+    const result = formatMessages([makeMsg({ chat_jid: 'group@g.us' })]);
+    expect(result).toContain('platform="whatsapp"');
   });
 
   it('handles empty array', () => {

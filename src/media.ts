@@ -12,14 +12,18 @@ export function sanitizeFilename(name: string): string {
     .slice(0, 200);
 }
 
-export function buildMediaPath(groupFolder: string, messageId: string, filename: string): string {
+export function buildMediaPath(groupFolder: string, filename: string): string {
   const safe = sanitizeFilename(filename);
-  return path.join(MEDIA_DIR, groupFolder, `${messageId}-${safe}`);
+  return path.join(MEDIA_DIR, groupFolder, safe);
 }
 
-export function containerMediaPath(messageId: string, filename: string): string {
+export function containerMediaPath(filename: string): string {
   const safe = sanitizeFilename(filename);
-  return `/workspace/media/${messageId}-${safe}`;
+  return `/workspace/media/${safe}`;
+}
+
+export function mediaFileExists(groupFolder: string, filename: string): boolean {
+  return fs.existsSync(buildMediaPath(groupFolder, filename));
 }
 
 export async function downloadAttachment(url: string, destPath: string): Promise<void> {

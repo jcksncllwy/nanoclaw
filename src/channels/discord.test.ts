@@ -26,10 +26,11 @@ vi.mock('../db.js', () => ({
 
 // Mock media
 vi.mock('../media.js', () => ({
-  buildMediaPath: vi.fn((_group: string, msgId: string, name: string) => `/mock/media/${msgId}-${name}`),
-  containerMediaPath: vi.fn((msgId: string, name: string) => `/workspace/media/${msgId}-${name}`),
+  buildMediaPath: vi.fn((_group: string, name: string) => `/mock/media/${name}`),
+  containerMediaPath: vi.fn((name: string) => `/workspace/media/${name}`),
   downloadAttachment: vi.fn().mockResolvedValue(undefined),
   formatSize: vi.fn((bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`),
+  mediaFileExists: vi.fn().mockReturnValue(false),
 }));
 
 // --- discord.js mock ---
@@ -508,7 +509,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: photo.png — /workspace/media/msg_001-photo.png]',
+          content: '[Image: photo.png — /workspace/media/photo.png]',
         }),
       );
     });
@@ -531,7 +532,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Video: clip.mp4 — /workspace/media/msg_001-clip.mp4]',
+          content: '[Video: clip.mp4 — /workspace/media/clip.mp4]',
         }),
       );
     });
@@ -554,7 +555,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[File: report.pdf — /workspace/media/msg_001-report.pdf]',
+          content: '[File: report.pdf — /workspace/media/report.pdf]',
         }),
       );
     });
@@ -577,7 +578,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: 'Check this out\n[Image: photo.jpg — /workspace/media/msg_001-photo.jpg]',
+          content: 'Check this out\n[Image: photo.jpg — /workspace/media/photo.jpg]',
         }),
       );
     });
@@ -601,7 +602,7 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: '[Image: a.png — /workspace/media/msg_001-a.png]\n[File: b.txt — /workspace/media/msg_001-b.txt]',
+          content: '[Image: a.png — /workspace/media/a.png]\n[File: b.txt — /workspace/media/b.txt]',
         }),
       );
     });

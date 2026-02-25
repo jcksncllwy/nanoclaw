@@ -10,11 +10,15 @@ import {
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_ONLY,
   TRIGGER_PATTERN,
+  WHATSAPP_DISABLED,
 } from './config.js';
 import { randomThinkingVerb } from './thinking-verbs.js';
 import { DiscordChannel } from './channels/discord.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
+import { TelegramChannel } from './channels/telegram.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -60,8 +64,6 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 // Anchor message IDs from piped follow-ups, keyed by chatJid.
 // The onOutput callback picks these up to create threads from the right anchor.
-const pipedAnchorIds = new Map<string, string>();
-const pipedAnchorVerbs = new Map<string, string>();
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -179,70 +181,51 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  // Progress thread state — reset on each new response cycle
-  let anchorMessageId: string | null = null;
-  let anchorVerb: string = '';
-  let progressThreadId: string | null = null;
-  let lastProgressTime = 0;
-  let resultSentSinceLastProgress = false;
-  const PROGRESS_THROTTLE_MS = 2000;
+  // Send anchor message and start typing indicator
+  const anchorVerb = randomThinkingVerb();
+  await channel.sendMessage(chatJid, `✻ ${anchorVerb}...`);
+  await channel.setTyping?.(chatJid, true);
+  // Discord typing expires after ~10s, so re-send every 8s
+  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
+    channel.setTyping?.(chatJid, true);
+  }, 8000);
 
-  // Send anchor message immediately — don't wait for container startup
-  if (channel.sendMessageReturningId) {
-    anchorVerb = randomThinkingVerb();
-    anchorMessageId = await channel.sendMessageReturningId(chatJid, `✻ ${anchorVerb}...`);
-  } else {
-    await channel.setTyping?.(chatJid, true);
-  }
+  const stopTyping = () => {
+    if (typingInterval) {
+      clearInterval(typingInterval);
+      typingInterval = null;
+      channel.setTyping?.(chatJid, false);
+    }
+  };
+
+  // Track recent progress text to deduplicate against final result.
+  // The SDK emits the final answer as both an assistant text block (progress)
+  // and a result message — without dedup the user sees it twice.
+  let lastProgressText = '';
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Progress events → post to thread
+    // Progress events → post directly to channel
     if (result.status === 'progress' && result.progress) {
-      const now = Date.now();
-      // Throttle: skip if last update was less than 2s ago
-      if (now - lastProgressTime < PROGRESS_THROTTLE_MS) return;
-      lastProgressTime = now;
-
-      // If a result was already sent, this is a new response cycle
-      // (piped follow-up message) — use the anchor sent by the pipe path
-      if (resultSentSinceLastProgress) {
-        anchorMessageId = pipedAnchorIds.get(chatJid) || null;
-        anchorVerb = pipedAnchorVerbs.get(chatJid) || randomThinkingVerb();
-        pipedAnchorIds.delete(chatJid);
-        pipedAnchorVerbs.delete(chatJid);
-        // If no piped anchor available, send one now
-        if (!anchorMessageId && channel.sendMessageReturningId) {
-          anchorVerb = randomThinkingVerb();
-          anchorMessageId = await channel.sendMessageReturningId(chatJid, `✻ ${anchorVerb}...`);
-        }
-        progressThreadId = null;
-        resultSentSinceLastProgress = false;
-      }
-
-      // Create thread from anchor on first progress event
-      if (!progressThreadId && anchorMessageId && channel.startThread) {
-        progressThreadId = await channel.startThread(
-          chatJid, anchorMessageId,
-          `✻ ${anchorVerb}...`,
-        );
-      }
-      // Post update to thread
-      if (progressThreadId && channel.sendThreadMessage) {
-        await channel.sendThreadMessage(progressThreadId, `▸ ${result.progress.activity}`);
-      }
+      lastProgressText = result.progress.activity;
+      await channel.sendMessage(chatJid, `▸ ${result.progress.activity}`);
       resetIdleTimer();
       return;
     }
 
     // Streaming output callback — called for each agent result
     if (result.result) {
-      resultSentSinceLastProgress = true;
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        // Skip if this result was already sent as the last progress message
+        if (text === lastProgressText) {
+          logger.debug({ group: group.name }, 'Skipping duplicate result (already sent as progress)');
+        } else {
+          stopTyping();
+          await channel.sendMessage(chatJid, text);
+        }
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -251,10 +234,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
+      stopTyping();
     }
   });
 
-  await channel.setTyping?.(chatJid, false);
+  stopTyping();
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -430,15 +414,8 @@ async function startMessageLoop(): Promise<void> {
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
             // Send immediate thinking verb for piped messages too
-            if (channel.sendMessageReturningId) {
-              const verb = randomThinkingVerb();
-              pipedAnchorVerbs.set(chatJid, verb);
-              channel.sendMessageReturningId(chatJid, `✻ ${verb}...`).then((id) => {
-                if (id) pipedAnchorIds.set(chatJid, id);
-              }).catch(() => {});
-            } else {
-              channel.setTyping?.(chatJid, true);
-            }
+            const verb = randomThinkingVerb();
+            channel.sendMessage(chatJid, `✻ ${verb}...`).catch(() => {});
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
@@ -470,13 +447,9 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
+async function main(): Promise<void> {
   ensureContainerRuntimeRunning();
   cleanupOrphans();
-}
-
-async function main(): Promise<void> {
-  ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
@@ -510,10 +483,16 @@ async function main(): Promise<void> {
     await discord.connect();
   }
 
-  if (!DISCORD_ONLY) {
+  if (!DISCORD_ONLY && !TELEGRAM_ONLY && !WHATSAPP_DISABLED) {
     whatsapp = new WhatsAppChannel(channelOpts);
     channels.push(whatsapp);
     await whatsapp.connect();
+  }
+
+  if (TELEGRAM_BOT_TOKEN) {
+    const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, channelOpts);
+    channels.push(telegram);
+    await telegram.connect();
   }
 
   // Start subsystems (independently of connection handler)
@@ -541,6 +520,15 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
     closeContainer: (jid) => queue.closeStdin(jid),
+    createEmoji: (guildId, name, imageUrl) => {
+      const channel = channels.find((c) => c.name === 'discord');
+      if (!channel?.createEmoji) throw new Error('Discord channel not available or does not support emoji creation');
+      return channel.createEmoji(guildId, name, imageUrl);
+    },
+    getGuildId: (jid) => {
+      const channel = findChannel(channels, jid);
+      return channel?.getGuildId?.(jid) ?? null;
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

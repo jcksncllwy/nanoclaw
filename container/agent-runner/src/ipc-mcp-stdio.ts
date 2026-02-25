@@ -357,6 +357,68 @@ server.tool(
   },
 );
 
+server.tool(
+  'download_attachment',
+  `Download a pending media attachment to the local media folder. Use this when a message includes a pending download reference like "(pending:dl_abc123)".
+
+When there's a filename collision (file already exists), ask the user what name to use and pass it as the filename parameter. The host will save the file and confirm in chat.`,
+  {
+    download_id: z.string().describe('The pending download ID (e.g., "dl_1234567890_abcdef")'),
+    filename: z.string().optional().describe('Optional custom filename. Use when renaming to avoid a collision (e.g., "photo (1).jpg"). If omitted, uses the original filename.'),
+  },
+  async (args) => {
+    const data: Record<string, string> = {
+      type: 'download_attachment',
+      downloadId: args.download_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (args.filename) {
+      data.filename = args.filename;
+    }
+
+    writeIpcFile(TASKS_DIR, data);
+
+    const msg = args.filename
+      ? `Download requested for ${args.download_id} with filename "${args.filename}".`
+      : `Download requested for ${args.download_id}.`;
+
+    return { content: [{ type: 'text' as const, text: msg }] };
+  },
+);
+
+server.tool(
+  'create_emoji',
+  `Create a custom emoji (expression) in the Discord server from an image URL or local file path.
+
+The emoji name must be 2-32 characters, alphanumeric and underscores only (no spaces or special characters).
+The image must be PNG, JPEG, GIF, WebP or AVIF, and under 256KB.
+The bot must have the Create Expressions permission in the server.
+
+Example: create_emoji({ name: "mimir_nod", image_url: "https://example.com/image.png" })`,
+  {
+    name: z.string().describe('Emoji name (2-32 chars, alphanumeric + underscores only, e.g. "mimir_nod")'),
+    image_url: z.string().describe('URL of the image to use for the emoji (PNG/JPEG/GIF/WebP/AVIF, max 256KB)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'create_emoji',
+      emojiName: args.name,
+      imageUrl: args.image_url,
+      sourceChatJid: chatJid,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Emoji creation requested for :${args.name}:. The host will confirm once created.` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

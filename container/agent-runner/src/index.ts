@@ -436,6 +436,10 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
+  // Buffer text progress: hold text blocks until a tool_use confirms they're
+  // intermediate thinking (not the final response). If a 'result' message
+  // comes instead, discard the buffer — it was the final response text.
+
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
@@ -510,10 +514,15 @@ async function runQuery(
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
 
-      // Emit progress events for tool_use content blocks
-      const msg = (message as { message?: { content?: Array<{ type: string; name?: string; input?: Record<string, unknown> }> } }).message;
+      // Emit progress events for text and tool_use content blocks.
+      // Text blocks are emitted immediately — the host-side result handler
+      // delivers the final response separately, so there's no duplication risk.
+      const msg = (message as { message?: { content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }> } }).message;
       if (msg?.content) {
         for (const block of msg.content) {
+          if (block.type === 'text' && block.text?.trim()) {
+            writeOutput({ status: 'progress', result: null, progress: { activity: block.text.trim() } });
+          }
           if (block.type === 'tool_use' && block.name) {
             const activity = formatToolActivity(block.name, block.input || {});
             if (activity) {

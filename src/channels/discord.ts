@@ -3,7 +3,7 @@ import { Attachment, Client, Collection, Events, GatewayIntentBits, Message, Tex
 import { ASSISTANT_NAME, MEDIA_AUTO_DOWNLOAD_MAX_BYTES, TRIGGER_PATTERN } from '../config.js';
 import { PendingDownload } from '../db.js';
 import { logger } from '../logger.js';
-import { buildMediaPath, containerMediaPath, downloadAttachment, formatSize } from '../media.js';
+import { buildMediaPath, containerMediaPath, downloadAttachment, formatSize, mediaFileExists } from '../media.js';
 import {
   Channel,
   OnChatMetadata,
@@ -203,11 +203,12 @@ export class DiscordChannel implements Channel {
 
       const size = att.size;
 
-      if (size >= MEDIA_AUTO_DOWNLOAD_MAX_BYTES) {
-        // Large file — create pending download record
+      // Large file or name collision — create pending download for agent to handle
+      const needsPending = size >= MEDIA_AUTO_DOWNLOAD_MAX_BYTES || mediaFileExists(groupFolder, name);
+      if (needsPending) {
         const dlId = `dl_${messageId}_${att.id}`;
+        const isCollision = mediaFileExists(groupFolder, name);
         if (this.opts.createPendingDownload) {
-          const hostPath = buildMediaPath(groupFolder, messageId, name);
           this.opts.createPendingDownload({
             id: dlId,
             chat_jid: chatJid,
@@ -219,15 +220,20 @@ export class DiscordChannel implements Channel {
             message_id: messageId,
             created_at: new Date().toISOString(),
           });
-          logger.info({ dlId, name, size: formatSize(size) }, 'Large attachment pending download approval');
         }
-        descriptions.push(`[${typeLabel}: ${name} — ${formatSize(size)}, not yet downloaded (pending:${dlId})]`);
+        if (isCollision) {
+          logger.info({ dlId, name }, 'Attachment name collision, pending user decision');
+          descriptions.push(`[${typeLabel}: ${name} — a file with this name already exists (pending:${dlId})]`);
+        } else {
+          logger.info({ dlId, name, size: formatSize(size) }, 'Large attachment pending download approval');
+          descriptions.push(`[${typeLabel}: ${name} — ${formatSize(size)}, not yet downloaded (pending:${dlId})]`);
+        }
         continue;
       }
 
-      // Small file — download immediately
-      const hostPath = buildMediaPath(groupFolder, messageId, name);
-      const agentPath = containerMediaPath(messageId, name);
+      // Download immediately
+      const hostPath = buildMediaPath(groupFolder, name);
+      const agentPath = containerMediaPath(name);
       try {
         await downloadAttachment(att.url, hostPath);
         descriptions.push(`[${typeLabel}: ${name} — ${agentPath}]`);
@@ -423,10 +429,36 @@ export class DiscordChannel implements Channel {
     try {
       const thread = await this.client.channels.fetch(threadId);
       if (thread && 'send' in thread) {
-        await (thread as ThreadChannel).send(text);
+        const threadChannel = thread as ThreadChannel;
+        const MAX_LENGTH = 2000;
+        if (text.length <= MAX_LENGTH) {
+          await threadChannel.send(text);
+        } else {
+          for (let i = 0; i < text.length; i += MAX_LENGTH) {
+            await threadChannel.send(text.slice(i, i + MAX_LENGTH));
+          }
+        }
       }
     } catch (err) {
       logger.debug({ threadId, err }, 'Failed to send Discord thread message');
     }
+  }
+
+  async createEmoji(guildId: string, name: string, imageUrl: string): Promise<string> {
+    if (!this.client) throw new Error('Discord client not initialized');
+    const guild = await this.client.guilds.fetch(guildId);
+    const emoji = await guild.emojis.create({ attachment: imageUrl, name });
+    return emoji.id;
+  }
+
+  getGuildId(jid: string): string | null {
+    if (!this.client) return null;
+    const channelId = jid.replace(/^dc:/, '');
+    // Look up guild from cached channels
+    const channel = this.client.channels.cache.get(channelId);
+    if (channel && 'guild' in channel) {
+      return (channel as TextChannel).guild.id;
+    }
+    return null;
   }
 }

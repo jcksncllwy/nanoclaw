@@ -9,9 +9,15 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function platformFromJid(jid: string): string {
+  if (jid.startsWith('dc:')) return 'discord';
+  if (jid.startsWith('tg:')) return 'telegram';
+  return 'whatsapp';
+}
+
 export function formatMessages(messages: NewMessage[]): string {
   const lines = messages.map((m) =>
-    `<message sender="${escapeXml(m.sender_name)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`,
+    `<message sender="${escapeXml(m.sender_name)}" platform="${platformFromJid(m.chat_jid)}" time="${m.timestamp}">${escapeXml(m.content)}</message>`,
   );
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }
