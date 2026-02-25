@@ -725,47 +725,6 @@ describe('DiscordChannel', () => {
     });
   });
 
-  // --- setTyping ---
-
-  describe('setTyping', () => {
-    it('sends typing indicator when isTyping is true', async () => {
-      const opts = createTestOpts();
-      const channel = new DiscordChannel('test-token', opts);
-      await channel.connect();
-
-      const mockChannel = {
-        send: vi.fn(),
-        sendTyping: vi.fn().mockResolvedValue(undefined),
-      };
-      currentClient().channels.fetch.mockResolvedValue(mockChannel);
-
-      await channel.setTyping('dc:1234567890123456', true);
-
-      expect(mockChannel.sendTyping).toHaveBeenCalled();
-    });
-
-    it('does nothing when isTyping is false', async () => {
-      const opts = createTestOpts();
-      const channel = new DiscordChannel('test-token', opts);
-      await channel.connect();
-
-      await channel.setTyping('dc:1234567890123456', false);
-
-      // channels.fetch should NOT be called
-      expect(currentClient().channels.fetch).not.toHaveBeenCalled();
-    });
-
-    it('does nothing when client is not initialized', async () => {
-      const opts = createTestOpts();
-      const channel = new DiscordChannel('test-token', opts);
-
-      // Don't connect
-      await channel.setTyping('dc:1234567890123456', true);
-
-      // No error
-    });
-  });
-
   // --- Channel properties ---
 
   describe('channel properties', () => {

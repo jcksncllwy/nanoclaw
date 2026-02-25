@@ -381,19 +381,6 @@ export class DiscordChannel implements Channel {
     }
   }
 
-  async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!this.client || !isTyping) return;
-    try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
-      if (channel && 'sendTyping' in channel) {
-        await (channel as TextChannel).sendTyping();
-      }
-    } catch (err) {
-      logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
-    }
-  }
-
   async sendMessageReturningId(jid: string, text: string): Promise<string | null> {
     if (!this.client) return null;
     try {
@@ -405,6 +392,22 @@ export class DiscordChannel implements Channel {
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message for thread');
       return null;
+    }
+  }
+
+  async editMessage(jid: string, messageId: string, text: string): Promise<boolean> {
+    if (!this.client) return false;
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return false;
+      const textChannel = channel as TextChannel;
+      const message = await textChannel.messages.fetch(messageId);
+      await message.edit(text);
+      return true;
+    } catch (err) {
+      logger.debug({ jid, messageId, err }, 'Failed to edit Discord message');
+      return false;
     }
   }
 

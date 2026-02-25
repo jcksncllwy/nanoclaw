@@ -59,6 +59,9 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+// Per-JID anchor tracking — shared between onOutput callback and piped message path
+const pendingAnchors: Record<string, string> = {}; // jid → messageId
+
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -181,33 +184,41 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  // Send anchor message and start typing indicator
+  // Send anchor message — we'll replace it with the first real response
   const anchorVerb = randomThinkingVerb();
-  await channel.sendMessage(chatJid, `✻ ${anchorVerb}...`);
-  await channel.setTyping?.(chatJid, true);
-  // Discord typing expires after ~10s, so re-send every 8s
-  let typingInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
-    channel.setTyping?.(chatJid, true);
-  }, 8000);
-
-  const stopTyping = () => {
-    if (typingInterval) {
-      clearInterval(typingInterval);
-      typingInterval = null;
-      channel.setTyping?.(chatJid, false);
-    }
-  };
+  const anchorId = await channel.sendMessageReturningId?.(chatJid, `✻ ${anchorVerb}...`);
+  if (anchorId) {
+    pendingAnchors[chatJid] = anchorId;
+  } else {
+    await channel.sendMessage(chatJid, `✻ ${anchorVerb}...`);
+  }
 
   // Track recent progress text to deduplicate against final result.
   // The SDK emits the final answer as both an assistant text block (progress)
   // and a result message — without dedup the user sees it twice.
   let lastProgressText = '';
 
+  // Helper: replace pending anchor with real content, or send new message
+  const sendOrReplace = async (text: string) => {
+    const anchor = pendingAnchors[chatJid];
+    if (anchor) {
+      delete pendingAnchors[chatJid];
+      const edited = await channel.editMessage?.(chatJid, anchor, text);
+      if (edited) return;
+      logger.warn({ group: group.name }, 'Anchor edit failed, sending as new message');
+    }
+    await channel.sendMessage(chatJid, text);
+  };
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Progress events → post directly to channel
     if (result.status === 'progress' && result.progress) {
-      lastProgressText = result.progress.activity;
-      await channel.sendMessage(chatJid, `▸ ${result.progress.activity}`);
+      const activity = result.progress.activity
+        .replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      if (!activity) return;
+      lastProgressText = activity;
+      const prefix = result.progress.type === 'tool' ? '▸ ' : '';
+      await sendOrReplace(`${prefix}${activity}`);
       resetIdleTimer();
       return;
     }
@@ -223,8 +234,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         if (text === lastProgressText) {
           logger.debug({ group: group.name }, 'Skipping duplicate result (already sent as progress)');
         } else {
-          stopTyping();
-          await channel.sendMessage(chatJid, text);
+          await sendOrReplace(text);
         }
         outputSentToUser = true;
       }
@@ -234,11 +244,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
-      stopTyping();
     }
   });
 
-  stopTyping();
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -413,9 +421,12 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Send immediate thinking verb for piped messages too
+            // Send anchor for piped messages — will be replaced by the response
             const verb = randomThinkingVerb();
-            channel.sendMessage(chatJid, `✻ ${verb}...`).catch(() => {});
+            const anchorText = `✻ ${verb}...`;
+            channel.sendMessageReturningId?.(chatJid, anchorText)
+              .then((id) => { if (id) pendingAnchors[chatJid] = id; })
+              .catch(() => channel.sendMessage(chatJid, anchorText).catch(() => {}));
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
@@ -490,7 +501,10 @@ async function main(): Promise<void> {
   }
 
   if (TELEGRAM_BOT_TOKEN) {
-    const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, channelOpts);
+    const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, {
+      ...channelOpts,
+      createPendingDownload,
+    });
     channels.push(telegram);
     await telegram.connect();
   }

@@ -238,16 +238,6 @@ export class WhatsAppChannel implements Channel {
     this.sock?.end(undefined);
   }
 
-  async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    try {
-      const status = isTyping ? 'composing' : 'paused';
-      logger.debug({ jid, status }, 'Sending presence update');
-      await this.sock.sendPresenceUpdate(status, jid);
-    } catch (err) {
-      logger.debug({ jid, err }, 'Failed to update typing status');
-    }
-  }
-
   /**
    * Sync group metadata from WhatsApp.
    * Fetches all participating groups and stores their names in the database.

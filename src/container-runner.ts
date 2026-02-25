@@ -52,7 +52,7 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
-  progress?: { activity: string };
+  progress?: { activity: string; type?: 'text' | 'tool' };
 }
 
 interface VolumeMount {

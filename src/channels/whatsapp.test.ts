@@ -838,42 +838,6 @@ describe('WhatsAppChannel', () => {
     });
   });
 
-  // --- Typing indicator ---
-
-  describe('setTyping', () => {
-    it('sends composing presence when typing', async () => {
-      const opts = createTestOpts();
-      const channel = new WhatsAppChannel(opts);
-
-      await connectChannel(channel);
-
-      await channel.setTyping('test@g.us', true);
-      expect(fakeSocket.sendPresenceUpdate).toHaveBeenCalledWith('composing', 'test@g.us');
-    });
-
-    it('sends paused presence when stopping', async () => {
-      const opts = createTestOpts();
-      const channel = new WhatsAppChannel(opts);
-
-      await connectChannel(channel);
-
-      await channel.setTyping('test@g.us', false);
-      expect(fakeSocket.sendPresenceUpdate).toHaveBeenCalledWith('paused', 'test@g.us');
-    });
-
-    it('handles typing indicator failure gracefully', async () => {
-      const opts = createTestOpts();
-      const channel = new WhatsAppChannel(opts);
-
-      await connectChannel(channel);
-
-      fakeSocket.sendPresenceUpdate.mockRejectedValueOnce(new Error('Failed'));
-
-      // Should not throw
-      await expect(channel.setTyping('test@g.us', true)).resolves.toBeUndefined();
-    });
-  });
-
   // --- Channel properties ---
 
   describe('channel properties', () => {

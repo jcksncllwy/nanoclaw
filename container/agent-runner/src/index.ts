@@ -35,7 +35,7 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
-  progress?: { activity: string };
+  progress?: { activity: string; type?: 'text' | 'tool' };
 }
 
 interface SessionEntry {
@@ -521,12 +521,12 @@ async function runQuery(
       if (msg?.content) {
         for (const block of msg.content) {
           if (block.type === 'text' && block.text?.trim()) {
-            writeOutput({ status: 'progress', result: null, progress: { activity: block.text.trim() } });
+            writeOutput({ status: 'progress', result: null, progress: { type: 'text', activity: block.text.trim() } });
           }
           if (block.type === 'tool_use' && block.name) {
             const activity = formatToolActivity(block.name, block.input || {});
             if (activity) {
-              writeOutput({ status: 'progress', result: null, progress: { activity } });
+              writeOutput({ status: 'progress', result: null, progress: { type: 'tool', activity } });
             }
           }
         }

@@ -85,10 +85,10 @@ export interface Channel {
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
-  // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: send a message and return its ID (for creating threads from it)
   sendMessageReturningId?(jid: string, text: string): Promise<string | null>;
+  // Optional: edit a previously sent message
+  editMessage?(jid: string, messageId: string, text: string): Promise<boolean>;
   // Optional: thread support for progress indicators
   startThread?(jid: string, messageId: string, name: string): Promise<string | null>;
   sendThreadMessage?(threadId: string, text: string): Promise<void>;
