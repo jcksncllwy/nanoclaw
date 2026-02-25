@@ -28,6 +28,8 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   closeContainer: (groupJid: string) => void;
+  createEmoji?: (guildId: string, name: string, imageUrl: string) => Promise<string>;
+  getGuildId?: (jid: string) => string | null;
 }
 
 let ipcWatcherRunning = false;
@@ -175,6 +177,11 @@ export async function processTaskIpc(
     model?: string;
     // For download_attachment
     downloadId?: string;
+    filename?: string;
+    // For create_emoji
+    emojiName?: string;
+    imageUrl?: string;
+    sourceChatJid?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -416,12 +423,13 @@ export async function processTaskIpc(
           break;
         }
         try {
-          const localPath = buildMediaPath(dl.group_folder, dl.message_id, dl.filename);
+          const saveName = data.filename || dl.filename;
+          const localPath = buildMediaPath(dl.group_folder, saveName);
           await downloadAttachment(dl.url, localPath);
           completePendingDownload(dl.id, localPath);
           await deps.sendMessage(
             dl.chat_jid,
-            `Downloaded ${dl.filename} (${formatSize(dl.size)})`,
+            `Downloaded ${saveName} (${formatSize(dl.size)})`,
           );
           logger.info(
             { downloadId: data.downloadId, filename: dl.filename },
@@ -436,6 +444,43 @@ export async function processTaskIpc(
             dl.chat_jid,
             `Failed to download ${dl.filename} — the link may have expired.`,
           );
+        }
+      }
+      break;
+
+    case 'create_emoji':
+      if (data.emojiName && data.imageUrl && data.sourceChatJid) {
+        if (!deps.createEmoji || !deps.getGuildId) {
+          logger.warn('create_emoji: channel does not support emoji management');
+          break;
+        }
+        const guildId = deps.getGuildId(data.sourceChatJid);
+        if (!guildId) {
+          logger.warn({ jid: data.sourceChatJid }, 'create_emoji: could not resolve guild from JID');
+          await deps.sendMessage(data.sourceChatJid, `Could not resolve Discord server from channel.`);
+          break;
+        }
+        // Resolve container /workspace/media/ paths to host paths
+        let resolvedImageUrl = data.imageUrl;
+        const containerMediaPrefix = '/workspace/media/';
+        if (resolvedImageUrl.startsWith(containerMediaPrefix)) {
+          const filename = resolvedImageUrl.slice(containerMediaPrefix.length);
+          resolvedImageUrl = buildMediaPath(sourceGroup, filename);
+        } else if (resolvedImageUrl.startsWith('file://')) {
+          // Strip file:// scheme and any container path prefix
+          resolvedImageUrl = resolvedImageUrl.replace(/^file:\/\//, '');
+          if (resolvedImageUrl.startsWith(containerMediaPrefix)) {
+            const filename = resolvedImageUrl.slice(containerMediaPrefix.length);
+            resolvedImageUrl = buildMediaPath(sourceGroup, filename);
+          }
+        }
+        try {
+          const emojiId = await deps.createEmoji(guildId, data.emojiName, resolvedImageUrl);
+          logger.info({ emojiName: data.emojiName, emojiId, sourceGroup }, 'Emoji created via IPC');
+          await deps.sendMessage(data.sourceChatJid, `Emoji :${data.emojiName}: created (ID: ${emojiId}).`);
+        } catch (err) {
+          logger.error({ emojiName: data.emojiName, err }, 'Failed to create emoji');
+          await deps.sendMessage(data.sourceChatJid, `Failed to create emoji :${data.emojiName}: — ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       break;

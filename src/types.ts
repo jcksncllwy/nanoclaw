@@ -92,6 +92,9 @@ export interface Channel {
   // Optional: thread support for progress indicators
   startThread?(jid: string, messageId: string, name: string): Promise<string | null>;
   sendThreadMessage?(threadId: string, text: string): Promise<void>;
+  // Optional: emoji/expression management
+  createEmoji?(guildId: string, name: string, imageUrl: string): Promise<string>;
+  getGuildId?(jid: string): string | null;
 }
 
 // Callback type that channels use to deliver inbound messages
